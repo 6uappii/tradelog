@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TradeLog — журнал трейдера</title>
+  <meta name="description" content="Простий журнал угод: календар PnL, крива капіталу, аналітика сетапів та емоцій." />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📈</text></svg>" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">📈 <span>TradeLog</span></div>
+    <nav class="tabs">
+      <button class="tab active" data-view="dashboard">Дашборд</button>
+      <button class="tab" data-view="trades">Угоди</button>
+      <button class="tab" data-view="insights">Інсайти</button>
+      <button class="tab" data-view="calc">Калькулятор</button>
+    </nav>
+    <button class="btn primary" id="addBtn">+ Угода</button>
+  </header>
+
+  <main>
+    <!-- DASHBOARD -->
+    <section class="view active" id="view-dashboard">
+      <div class="empty-hint" id="emptyHint">
+        <h2>Журнал порожній</h2>
+        <p>Додай першу угоду або завантаж демо-дані, щоб подивитися, як усе працює.</p>
+        <div class="row">
+          <button class="btn primary" id="emptyAdd">+ Додати угоду</button>
+          <button class="btn" id="demoBtn">Завантажити демо</button>
+        </div>
+      </div>
+
+      <div class="stats" id="stats"></div>
+
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-head">
+            <h3>Крива капіталу</h3>
+            <span class="muted" id="ddLabel"></span>
+          </div>
+          <div id="equity" class="chart"></div>
+        </div>
+        <div class="card">
+          <div class="card-head">
+            <h3>Календар PnL</h3>
+            <div class="cal-nav">
+              <button class="icon-btn" id="calPrev">‹</button>
+              <span id="calTitle"></span>
+              <button class="icon-btn" id="calNext">›</button>
+            </div>
+          </div>
+          <div id="calendar" class="calendar"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TRADES -->
+    <section class="view" id="view-trades">
+      <div class="card">
+        <div class="card-head">
+          <h3>Усі угоди</h3>
+          <div class="row">
+            <input type="search" id="search" placeholder="Пошук: тікер, сетап, нотатка…" />
+            <button class="btn" id="exportBtn">Експорт JSON</button>
+            <label class="btn">Імпорт<input type="file" id="importFile" accept=".json" hidden /></label>
+            <button class="btn danger ghost" id="clearBtn">Очистити</button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table class="trades">
+            <thead>
+              <tr>
+                <th>Дата</th><th>Тікер</th><th>Сторона</th><th>Вхід</th><th>Вихід</th>
+                <th>К-сть</th><th>PnL</th><th>R</th><th>Сетап</th><th>Емоція</th><th></th>
+              </tr>
+            </thead>
+            <tbody id="tradeRows"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- INSIGHTS -->
+    <section class="view" id="view-insights">
+      <div class="verdicts" id="verdicts"></div>
+      <div class="grid-2">
+        <div class="card"><h3>PnL за сетапами</h3><div id="bySetup" class="bars"></div></div>
+        <div class="card"><h3>PnL за емоціями</h3><div id="byEmotion" class="bars"></div></div>
+        <div class="card"><h3>PnL за днями тижня</h3><div id="byWeekday" class="bars"></div></div>
+        <div class="card"><h3>PnL за тікерами</h3><div id="byTicker" class="bars"></div></div>
+      </div>
+    </section>
+
+    <!-- CALCULATOR -->
+    <section class="view" id="view-calc">
+      <div class="card calc">
+        <h3>Калькулятор розміру позиції</h3>
+        <p class="muted">Скільки купувати, щоб на стопі втратити рівно стільки, скільки готовий.</p>
+        <div class="form-grid">
+          <label>Депозит, $<input type="number" id="cBalance" value="10000" step="any" /></label>
+          <label>Ризик на угоду, %<input type="number" id="cRisk" value="1" step="any" /></label>
+          <label>Ціна входу<input type="number" id="cEntry" value="100" step="any" /></label>
+          <label>Стоп-лос<input type="number" id="cStop" value="97" step="any" /></label>
+          <label>Тейк-профіт (необов'язково)<input type="number" id="cTarget" value="109" step="any" /></label>
+        </div>
+        <div class="calc-out" id="calcOut"></div>
+      </div>
+    </section>
+  </main>
+
+  <!-- MODAL -->
+  <dialog id="tradeDialog">
+    <form method="dialog" id="tradeForm">
+      <h3 id="dialogTitle">Нова угода</h3>
+      <div class="form-grid">
+        <label>Дата<input type="date" name="date" required /></label>
+        <label>Тікер<input type="text" name="ticker" placeholder="BTCUSDT, AAPL…" required /></label>
+        <label>Сторона
+          <select name="side">
+            <option value="long">Long</option>
+            <option value="short">Short</option>
+          </select>
+        </label>
+        <label>Кількість<input type="number" name="qty" step="any" min="0" required /></label>
+        <label>Ціна входу<input type="number" name="entry" step="any" required /></label>
+        <label>Ціна виходу<input type="number" name="exit" step="any" required /></label>
+        <label>Стоп-лос (для R)<input type="number" name="stop" step="any" /></label>
+        <label>Комісії, $<input type="number" name="fees" step="any" value="0" /></label>
+        <label>Сетап<input type="text" name="setup" list="setupList" placeholder="Пробій, відскок…" /></label>
+        <label>Емоція
+          <select name="emotion">
+            <option>Спокій</option>
+            <option>Впевненість</option>
+            <option>FOMO</option>
+            <option>Страх</option>
+            <option>Жадібність</option>
+            <option>Реванш</option>
+            <option>Нудьга</option>
+          </select>
+        </label>
+        <label class="full">Нотатки<textarea name="notes" rows="3" placeholder="Чому увійшов, що пішло не так…"></textarea></label>
+      </div>
+      <datalist id="setupList"></datalist>
+      <div class="pnl-preview" id="pnlPreview"></div>
+      <div class="row end">
+        <button type="button" class="btn ghost" id="cancelBtn">Скасувати</button>
+        <button type="submit" class="btn primary">Зберегти</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div class="tooltip" id="tooltip"></div>
+  <footer>Дані зберігаються тільки у твоєму браузері (localStorage). Не фінансова порада.</footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
