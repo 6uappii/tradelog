@@ -243,6 +243,7 @@
   }
   function closeTrade() {
     openId = null;
+    cancelAnimationFrame(overlayRAF);
     $('#drawer').classList.remove('open');
     $('#drawer').setAttribute('aria-hidden', 'true');
     $('#drawerBackdrop').classList.remove('open');
@@ -322,12 +323,11 @@
   }
 
   function levelsOf(t) {
-    const win = pnlOf(t) >= 0;
+    // thin full-width "grid" lines; the position boxes carry the main picture
     return [
-      t.stop != null && { price: t.stop, color: '#a8321f', lineStyle: 2, title: 'Стоп' },
-      t.target != null && { price: t.target, color: '#1d6b43', lineStyle: 2, title: 'Тейк' },
-      { price: t.entry, color: '#1b1a17', lineStyle: 0, title: 'Вхід' },
-      { price: t.exit, color: win ? '#1d6b43' : '#a8321f', lineStyle: 1, title: 'Вихід' },
+      t.stop != null && { price: t.stop, color: 'rgba(168,50,31,0.55)', lineStyle: 1, title: 'Стоп' },
+      t.target != null && { price: t.target, color: 'rgba(29,107,67,0.6)', lineStyle: 1, title: 'Тейк' },
+      { price: t.entry, color: 'rgba(27,26,23,0.45)', lineStyle: 2, title: 'Вхід' },
     ].filter(Boolean);
   }
 
@@ -335,10 +335,10 @@
     const LWC = window.LightweightCharts;
     return LWC.createChart(el, {
       autoSize: true,
-      layout: { background: { color: '#faf8f3' }, textColor: '#7a7366', fontFamily: 'IBM Plex Mono, monospace', fontSize: 11 },
-      grid: { vertLines: { color: '#ece6da' }, horzLines: { color: '#e2dbcc' } },
-      rightPriceScale: { borderColor: '#d8d1c2', scaleMargins: { top: 0.12, bottom: 0.12 } },
-      timeScale: { borderColor: '#d8d1c2', timeVisible: true, secondsVisible: false, rightOffset: 3 },
+      layout: { background: { type: 'solid', color: 'transparent' }, textColor: '#7a7366', fontFamily: 'IBM Plex Mono, monospace', fontSize: 11 },
+      grid: { vertLines: { color: 'rgba(27,26,23,0.05)' }, horzLines: { color: 'rgba(27,26,23,0.07)' } },
+      rightPriceScale: { borderColor: '#d8d1c2', scaleMargins: { top: 0.1, bottom: 0.1 } },
+      timeScale: { borderColor: '#d8d1c2', timeVisible: true, secondsVisible: false, rightOffset: 4 },
       crosshair: { mode: LWC.CrosshairMode.Normal, vertLine: { color: '#1b1a17', style: 3, labelBackgroundColor: '#1b1a17' }, horzLine: { color: '#1b1a17', style: 3, labelBackgroundColor: '#1b1a17' } },
       handleScroll: true, handleScale: true,
     });
@@ -346,8 +346,8 @@
 
   function addLevels(series, t) {
     const levels = levelsOf(t);
-    levels.forEach((l) => series.createPriceLine({ ...l, lineWidth: l.title === 'Вхід' ? 2 : 1, axisLabelVisible: true }));
-    const prices = levels.map((l) => l.price);
+    levels.forEach((l) => series.createPriceLine({ ...l, lineWidth: 1, axisLabelVisible: true }));
+    const prices = [...levels.map((l) => l.price), t.exit];
     series.applyOptions({
       autoscaleInfoProvider: (orig) => {
         const r = orig();
@@ -358,19 +358,70 @@
     });
   }
 
-  function entryExitMarkers(t, entryT, exitT) {
-    const long = t.side !== 'short';
+  // TradingView-style long/short position tool drawn under the candles.
+  // iEntry / iExit / iEnd are logical bar indices on the chart.
+  let overlayRAF = 0;
+  function attachPositionOverlay(svg, svgTop, series, t, iEntry, iExit, iEnd) {
+    cancelAnimationFrame(overlayRAF);
+    const myChart = chart;
+    const dir = dirOf(t);
+    const pctFrom = (p) => pct(((p - t.entry) / t.entry) * dir);
+    const rr = t.stop != null && t.target != null && t.stop !== t.entry ? Math.abs(t.target - t.entry) / Math.abs(t.entry - t.stop) : null;
     const win = pnlOf(t) >= 0;
-    return [
-      { time: entryT, position: long ? 'belowBar' : 'aboveBar', color: '#1b1a17', shape: long ? 'arrowUp' : 'arrowDown', text: `${long ? 'Long' : 'Short'} ${price(t.entry)}` },
-      { time: exitT, position: long ? 'aboveBar' : 'belowBar', color: win ? '#1d6b43' : '#a8321f', shape: 'circle', text: `Вихід ${price(t.exit)}` },
-    ].sort((a, b) => a.time - b.time);
+    let lastKey = '';
+
+    const label = (x, y, text, color, anchor = 'start', bg = true) => {
+      const w = text.length * 6.4 + 10;
+      const rx = anchor === 'start' ? x : anchor === 'end' ? x - w : x - w / 2;
+      return `${bg ? `<rect x="${rx}" y="${y - 11}" width="${w}" height="16" fill="${color}"/>` : ''}
+        <text x="${rx + 5}" y="${y + 1}" font-size="10.5" font-family="IBM Plex Mono, monospace" fill="${bg ? '#faf8f3' : color}">${esc(text)}</text>`;
+    };
+
+    function draw() {
+      if (chart !== myChart) return; // chart was replaced
+      overlayRAF = requestAnimationFrame(draw);
+      const ts = chart.timeScale();
+      const plotW = ts.width();
+      const clampX = (x) => (x == null ? null : Math.min(plotW, x));
+      const x1 = clampX(ts.logicalToCoordinate(iEntry)), x2 = clampX(ts.logicalToCoordinate(iExit)), x3 = clampX(ts.logicalToCoordinate(iEnd));
+      const yE = series.priceToCoordinate(t.entry), yX = series.priceToCoordinate(t.exit);
+      const yS = t.stop != null ? series.priceToCoordinate(t.stop) : null;
+      const yT = t.target != null ? series.priceToCoordinate(t.target) : null;
+      if ([x1, x2, x3, yE, yX].some((v) => v == null)) return;
+      const key = [x1, x2, x3, yE, yX, yS, yT, svg.clientWidth].map((v) => Math.round(v ?? -1)).join(',');
+      if (key === lastKey) return;
+      lastKey = key;
+
+      const box = (yA, yB, light, dark) => {
+        const top = Math.min(yA, yB), h = Math.abs(yA - yB);
+        return `<rect x="${x1}" y="${top}" width="${Math.max(0, x3 - x1)}" height="${h}" fill="${light}"/>
+          <rect x="${x1}" y="${top}" width="${Math.max(0, x2 - x1)}" height="${h}" fill="${dark}"/>`;
+      };
+      let s = '';
+      if (yT != null) s += box(yE, yT, 'rgba(29,107,67,0.10)', 'rgba(29,107,67,0.20)');
+      if (yS != null) s += box(yE, yS, 'rgba(168,50,31,0.10)', 'rgba(168,50,31,0.20)');
+      svg.innerHTML = s;
+      s = `<line x1="${x1}" x2="${x3}" y1="${yE}" y2="${yE}" stroke="#1b1a17" stroke-width="1.25"/>`;
+      s += `<line x1="${x1}" x2="${x2}" y1="${yE}" y2="${yX}" stroke="#1b1a17" stroke-width="1.25" stroke-dasharray="4 4" opacity=".7"/>`;
+      s += `<circle cx="${x2}" cy="${yX}" r="3.5" fill="${win ? '#1d6b43' : '#a8321f'}" stroke="#faf8f3" stroke-width="1.5"/>`;
+
+      // labels
+      const mid = (x1 + x3) / 2;
+      const outerY = (y, other) => (y < other ? y - 6 : y + 16); // just outside the box edge
+      if (yT != null) s += label(mid, outerY(yT, yE), `Тейк ${price(t.target)} (${pctFrom(t.target)})`, '#1d6b43', 'middle');
+      if (yS != null) s += label(mid, outerY(yS, yE), `Стоп ${price(t.stop)} (${pctFrom(t.stop)})`, '#a8321f', 'middle');
+      s += label(mid, yE + (yT != null && yT < yE ? 16 : -6), `${t.side === 'short' ? 'Short' : 'Long'} ${price(t.entry)}${rr ? ` · R:R ${rr.toFixed(2)}` : ''}`, '#1b1a17', 'middle');
+      s += label(x2 + 8, yX + 4, `${money(pnlOf(t))}`, win ? '#1d6b43' : '#a8321f', 'start', false);
+      svgTop.innerHTML = s;
+    }
+    draw();
   }
 
   async function renderPriceChart(t) {
     const box = $('#priceChart'), note = $('#chartNote');
     if (!box) return;
     const token = ++chartToken;
+    cancelAnimationFrame(overlayRAF);
     if (chart) { chart.remove(); chart = null; }
     if (!window.LightweightCharts) { box.innerHTML = '<p class="muted" style="padding:20px">Бібліотека графіків не завантажилась.</p>'; return; }
 
@@ -380,9 +431,9 @@
 
     if (CRYPTO_RE.test(symbol)) {
       const span = tt.exit - tt.entry;
-      const from = tt.entry - Math.max(span * 0.8, 3600 * 3);
-      const to = Math.min(tt.exit + Math.max(span * 0.5, 3600 * 2), Date.now() / 1000);
-      iv = INTERVALS.find(([, s]) => (to - from) / s <= 160) || INTERVALS[INTERVALS.length - 1];
+      const from = tt.entry - Math.max(span * 1.2, 3600 * 4);
+      const to = Math.min(tt.exit + Math.max(span * 0.9, 3600 * 3), Date.now() / 1000);
+      iv = INTERVALS.find(([, s]) => (to - from) / s <= 180) || INTERVALS[INTERVALS.length - 1];
       note.textContent = 'Завантажую свічки з Binance…';
       try {
         const rows = await fetchKlines(symbol, iv[0], Math.floor(from * 1000), Math.floor(to * 1000));
@@ -391,45 +442,50 @@
       if (token !== chartToken) return; // user moved to another trade meanwhile
     }
 
-    chart = makeChart(box);
-    const snap = (sec) => (iv ? Math.floor(sec / iv[1]) * iv[1] : sec) + TZ;
+    box.innerHTML = '<svg class="pos-overlay"></svg><div class="lw"></div><svg class="pos-overlay top"></svg>';
+    chart = makeChart(box.querySelector('.lw'));
+    const [svg, svgTop] = box.querySelectorAll('.pos-overlay');
+    let series, iEntry, iExit, iEnd, lastIdx;
 
     if (candles) {
-      const series = chart.addCandlestickSeries({
-        upColor: '#1d6b43', downColor: '#a8321f', borderVisible: false,
-        wickUpColor: '#1d6b43', wickDownColor: '#a8321f', priceLineVisible: false, lastValueVisible: false,
+      series = chart.addCandlestickSeries({
+        upColor: '#9cc9a6', downColor: '#1b1a17', borderVisible: true,
+        borderUpColor: '#1b1a17', borderDownColor: '#1b1a17',
+        wickUpColor: '#1b1a17', wickDownColor: '#1b1a17', priceLineVisible: false, lastValueVisible: false,
         priceFormat: { type: 'price', precision: t.entry < 1 ? 5 : t.entry < 100 ? 3 : 2, minMove: t.entry < 1 ? 0.00001 : t.entry < 100 ? 0.001 : 0.01 },
       });
       series.setData(candles);
-      addLevels(series, t);
-      const first = candles[0].time, last = candles[candles.length - 1].time;
-      const clamp = (x) => Math.min(last, Math.max(first, x));
-      series.setMarkers(entryExitMarkers(t, clamp(snap(tt.entry)), clamp(snap(tt.exit))));
-      // tint the holding period
-      const hold = chart.addHistogramSeries({ priceScaleId: 'hold', color: 'rgba(233,223,184,0.55)', priceLineVisible: false, lastValueVisible: false });
-      chart.priceScale('hold').applyOptions({ visible: false, scaleMargins: { top: 0, bottom: 0 } });
-      hold.setData(candles.map((c) => ({ time: c.time, value: c.time >= snap(tt.entry) && c.time <= snap(tt.exit) ? 1 : 0 })));
+      const idxAt = (sec) => {
+        const tm = sec + TZ;
+        let i = candles.findIndex((c) => c.time > tm) - 1;
+        if (i < -1) i = 0;
+        if (i === -2 || i === -1) i = tm < candles[0].time ? 0 : candles.length - 1;
+        return Math.max(0, i);
+      };
+      iEntry = idxAt(tt.entry); iExit = Math.max(iEntry + 1, idxAt(tt.exit));
+      lastIdx = candles.length - 1;
       note.innerHTML = `Свічки Binance · ${symbol} · ${iv[0]}${tt.exact ? '' : ' · час входу/виходу не вказано, показано весь день'}`;
     } else {
-      const series = chart.addLineSeries({ color: '#1b1a17', lineWidth: 2, lineStyle: 0, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: true });
-      // a straight entry→exit segment, sampled so bars (and markers) stay normal-sized,
-      // with empty padding on both sides
-      const STEPS = 40, PAD = 12;
+      // a straight entry→exit segment, sampled so the time axis behaves, with padding on both sides
+      series = chart.addLineSeries({ color: 'rgba(0,0,0,0)', lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+      const STEPS = 40, PAD = 14;
       const step = Math.max(60, Math.round((tt.exit - tt.entry) / STEPS));
-      const a = tt.entry + TZ, b = a + step * STEPS;
+      const a = tt.entry + TZ;
       const data = [];
       for (let i = -PAD; i <= STEPS + PAD; i++) {
         const time = a + i * step;
         data.push(i < 0 || i > STEPS ? { time } : { time, value: t.entry + (t.exit - t.entry) * (i / STEPS) });
       }
       series.setData(data);
-      addLevels(series, t);
-      series.setMarkers(entryExitMarkers(t, a, b));
+      iEntry = PAD; iExit = PAD + STEPS; lastIdx = data.length - 1;
       note.textContent = CRYPTO_RE.test(symbol)
         ? `Не вдалося завантажити котирування ${symbol} — показано схему угоди.`
-        : 'Схема угоди: вхід → вихід на фоні рівнів. Реальні свічки підтягуються для крипто-пар Binance (BTCUSDT, ETHUSDT…).';
+        : 'Схема угоди без свічок. Реальні свічки підтягуються для крипто-пар Binance (BTCUSDT, ETHUSDT…).';
     }
-    chart.timeScale().fitContent();
+    addLevels(series, t);
+    iEnd = iExit + Math.max(14, Math.round((iExit - iEntry) * 1.2));
+    chart.timeScale().setVisibleLogicalRange({ from: -1, to: Math.max(lastIdx, iEnd) + 3 });
+    attachPositionOverlay(svg, svgTop, series, t, iEntry, iExit, iEnd);
   }
 
   function kv(rows) {
@@ -497,13 +553,13 @@
       <div class="muted">${outcome}${rank ? ` · ${rank}-а з ${all.length} за результатом` : ''}</div>
 
       <div class="d-section">
-        <h4>Графік <span>стоп і тейк — лінії на сітці</span></h4>
+        <h4>Графік <span>позиція як у TradingView</span></h4>
         <div class="price-chart" id="priceChart"></div>
         <div class="chart-legend">
-          <span><i class="lg lg-entry"></i>Вхід</span>
-          <span><i class="lg lg-exit"></i>Вихід</span>
-          <span><i class="lg lg-stop"></i>Стоп</span>
-          <span><i class="lg lg-target"></i>Тейк</span>
+          <span><i class="sw sw-target"></i>Зона тейку</span>
+          <span><i class="sw sw-stop"></i>Зона стопу</span>
+          <span><i class="lg lg-path"></i>Вхід → вихід</span>
+          <span class="muted">темніше — поки позиція відкрита</span>
         </div>
         <p class="muted chart-note" id="chartNote"></p>
       </div>
