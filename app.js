@@ -219,7 +219,7 @@
       const p = pnlOf(t), r = rOf(t);
       return `<tr class="trade ${t.id === openId ? 'selected' : ''}" data-id="${t.id}">
         <td class="mono">${esc(t.date)}</td>
-        <td><span class="tk">${esc(t.ticker)}</span>${t.notes ? '<span class="note-ico" title="Є нотатка">✎</span>' : ''}</td>
+        <td><span class="tk">${esc(t.ticker)}</span>${t.source === 'okx' ? '<span class="src-tag">OKX</span>' : ''}${t.notes ? '<span class="note-ico" title="Є нотатка">✎</span>' : ''}</td>
         <td><span class="side ${t.side}">${t.side === 'short' ? 'Short' : 'Long'}</span></td>
         <td class="num">${price(t.entry)}</td><td class="num">${price(t.exit)}</td><td class="num">${price(t.qty)}</td>
         <td class="num ${cls(p)}">${money(p)}</td>
@@ -526,8 +526,9 @@
     let outcome = 'Закрита вручну';
     if (stopHit) outcome = 'Вибило по стопу';
     else if (targetHit) outcome = 'Дійшла до цілі';
-    else if (p > 0) outcome = 'Закрита в плюс до цілі';
-    else if (p < 0) outcome = 'Закрита в мінус до стопу';
+    else if (p > 0) outcome = t.target != null ? 'Закрита в плюс до цілі' : 'Закрита в плюс';
+    else if (p < 0) outcome = t.stop != null ? 'Закрита в мінус до стопу' : 'Закрита в мінус';
+    if (t.okx && +t.okx.type >= 3) outcome = OKX_CLOSE_TYPES[t.okx.type].replace(/^./, (c) => c.toUpperCase());
 
     const similar = sameSetup.filter((x) => x.id !== t.id).slice(-5).reverse();
 
@@ -539,7 +540,8 @@
             <span class="side ${t.side}">${t.side === 'short' ? 'Short' : 'Long'}</span>
             <span>${longDate(t.date)}${t.entryTime ? `, ${esc(t.entryTime)}` : ''}${t.exitTime || t.exitDate ? ` → ${t.exitDate && t.exitDate !== t.date ? esc(t.exitDate) + ' ' : ''}${esc(t.exitTime || '')}` : ''}</span>
             ${t.setup ? `<span class="tag">${esc(t.setup)}</span>` : ''}
-            <span class="tag">${esc(t.emotion)}</span>
+            ${t.emotion ? `<span class="tag">${esc(t.emotion)}</span>` : ''}
+            ${t.source === 'okx' ? `<span class="tag">OKX · ${esc(t.instId)}</span>` : ''}
           </div>
         </div>
         ${t.grade ? `<div class="d-grade" title="Оцінка виконання">${esc(t.grade)}</div>` : ''}
@@ -580,7 +582,7 @@
           ['Обсяг позиції', money(size, false)],
           ['Рух на одиницю', (dirOf(t) * (t.exit - t.entry) >= 0 ? '+' : '−') + price(Math.abs(t.exit - t.entry))],
           ['Валовий PnL', money(g), cls(g)],
-          ['Комісії', money(-(t.fees || 0)), t.fees ? 'neg' : ''],
+          [t.okx ? 'Комісії й фандинг' : 'Комісії', money(-(t.fees || 0)), t.fees > 0 ? 'neg' : t.fees < 0 ? 'pos' : ''],
           ['Чистий PnL', money(p), cls(p)],
           ['Дохідність на обсяг', pct(p / size), cls(p)],
           ['Комісії від валового', g ? (Math.abs((t.fees || 0) / g) * 100).toFixed(1) + '%' : '—'],
@@ -621,6 +623,21 @@
           ['Сумарно', money(setupSt.net), cls(setupSt.net)],
           ['Profit factor', setupSt.pf === Infinity ? '∞' : setupSt.pf.toFixed(2), setupSt.pf >= 1 ? 'pos' : 'neg'],
           ['Середній R', fmtR(setupSt.avgR), cls(setupSt.avgR || 0)],
+        ])}
+      </div>` : ''}
+
+      ${t.okx ? `<div class="d-section">
+        <h4>Дані OKX <span>${esc(t.instId)}${t.okx.inverse ? ' · інверсний, перераховано в USD' : ''}</span></h4>
+        ${kv([
+          ['PnL за ціною', money(t.okx.pnl), cls(t.okx.pnl)],
+          ['Комісія біржі', money(t.okx.fee), cls(t.okx.fee)],
+          ['Фандинг', money(t.okx.fundingFee), cls(t.okx.fundingFee)],
+          t.okx.liqPenalty ? ['Штраф ліквідації', money(t.okx.liqPenalty), 'neg'] : null,
+          ['Реалізований PnL', money(t.okx.realizedPnl), cls(t.okx.realizedPnl)],
+          ['Плече', t.okx.lever ? t.okx.lever + '×' : '—'],
+          ['Маржа', t.okx.mgnMode === 'isolated' ? 'ізольована' : t.okx.mgnMode === 'cross' ? 'крос' : esc(t.okx.mgnMode || '—')],
+          ['Контрактів', price(t.okx.contracts)],
+          ['Закриття', OKX_CLOSE_TYPES[t.okx.type] || '—', +t.okx.type >= 3 ? 'neg' : ''],
         ])}
       </div>` : ''}
 
@@ -888,6 +905,173 @@
     save();
   }
 
+  // ---------- OKX import ----------
+  // Pulls closed positions from /api/v5/account/positions-history (last 3 months),
+  // signing requests in the browser with WebCrypto. Keys never leave this page except to okx.com.
+  const OKX_HOST = 'https://www.okx.com';
+  const OKX_KEY = 'tradelog.okx';
+  const OKX_CLOSE_TYPES = { 1: 'частково закрита', 2: 'закрита', 3: 'ліквідація', 4: 'часткова ліквідація', 5: 'ADL' };
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  async function okxSign(secret, prehash) {
+    const enc = new TextEncoder();
+    const key = await crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+    const sig = await crypto.subtle.sign('HMAC', key, enc.encode(prehash));
+    return btoa(String.fromCharCode(...new Uint8Array(sig)));
+  }
+
+  async function okxGet(path, creds) {
+    const headers = {};
+    if (creds) {
+      const ts = new Date().toISOString();
+      headers['OK-ACCESS-KEY'] = creds.key;
+      headers['OK-ACCESS-SIGN'] = await okxSign(creds.secret, ts + 'GET' + path);
+      headers['OK-ACCESS-TIMESTAMP'] = ts;
+      headers['OK-ACCESS-PASSPHRASE'] = creds.passphrase;
+      if (creds.demo) headers['x-simulated-trading'] = '1';
+    }
+    let res;
+    try { res = await fetch(OKX_HOST + path, { headers }); }
+    catch { throw new Error('Немає зʼєднання з okx.com (мережа або блокування).'); }
+    const body = await res.json().catch(() => ({}));
+    if (body.code !== '0') {
+      const hints = {
+        50111: 'Невірний API key.', 50113: 'Невірний підпис — перевір Secret key.', 50105: 'Невірна passphrase.',
+        50101: 'Ключ не від того середовища: увімкни/вимкни «Демо-рахунок».', 50110: 'Твій IP не в білому списку ключа.',
+        50119: 'Такого API-ключа не існує.', 50120: 'У ключа немає права на читання.', 50102: 'Неправильний час на компʼютері.',
+      };
+      throw new Error(hints[body.code] || `OKX: ${body.msg || res.status} (код ${body.code ?? res.status})`);
+    }
+    return body.data;
+  }
+
+  async function okxContractValues(creds) {
+    const map = {};
+    for (const type of ['SWAP', 'FUTURES']) {
+      try {
+        const data = await okxGet(`/api/v5/public/instruments?instType=${type}`, creds && creds.demo ? { ...creds } : null);
+        for (const i of data) map[i.instId] = { ctVal: +i.ctVal, ctType: i.ctType, ctValCcy: i.ctValCcy };
+      } catch { /* fall back to deriving size from PnL */ }
+    }
+    return map;
+  }
+
+  function okxToTrade(p, ct) {
+    const open = +p.openAvgPx, close = +p.closeAvgPx;
+    const side = p.direction === 'short' || p.posSide === 'short' ? 'short' : 'long';
+    const dir = side === 'short' ? -1 : 1;
+    const contracts = +p.closeTotalPos || +p.openMaxPos || 0;
+    const info = ct[p.instId];
+    let qty = null;
+    if (p.instType === 'MARGIN') qty = contracts;
+    else if (info && info.ctType === 'linear') qty = contracts * info.ctVal;
+    else if (info && info.ctType === 'inverse' && open) qty = (contracts * info.ctVal) / open; // USD value → coins
+    // fallback: size implied by price PnL
+    if (!(qty > 0) && close !== open && p.pnl) qty = Math.abs(+p.pnl / (close - open));
+    if (!(qty > 0)) qty = contracts;
+    qty = +qty.toPrecision(10);
+
+    // inverse contracts settle PnL in the coin — convert to quote currency at the close price
+    const k = info && info.ctType === 'inverse' ? close : 1;
+    const realized = +p.realizedPnl * k;
+    const gross = (close - open) * qty * dir;
+    const cIn = new Date(+p.cTime), cOut = new Date(+p.uTime);
+    const hm = (d) => `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    const parts = p.instId.split('-');
+    return {
+      id: `okx-${p.posId}-${p.uTime}`,
+      created: +p.uTime,
+      source: 'okx',
+      instId: p.instId,
+      ticker: parts.slice(0, 2).join(''),
+      side, qty,
+      entry: open, exit: close, stop: null, target: null,
+      // fold exchange fees, funding and rounding into "fees" so net PnL equals OKX realized PnL
+      fees: +(gross - realized).toFixed(8),
+      date: isoDate(cIn), entryTime: hm(cIn), exitDate: isoDate(cOut), exitTime: hm(cOut),
+      setup: '', emotion: '', grade: '', notes: '',
+      okx: {
+        realizedPnl: realized, pnl: (+p.pnl || 0) * k, fee: (+p.fee || 0) * k, fundingFee: (+p.fundingFee || 0) * k,
+        liqPenalty: (+p.liqPenalty || 0) * k, lever: p.lever, mgnMode: p.mgnMode, type: p.type, inverse: k !== 1,
+        contracts, ccy: p.ccy || '',
+      },
+    };
+  }
+
+  async function okxImport(creds, log) {
+    log('Перевіряю ключ…');
+    await okxGet('/api/v5/account/config', creds);
+    log('Ключ працює. Завантажую розміри контрактів…');
+    const ct = await okxContractValues(creds);
+    const positions = [];
+    let after = '';
+    for (let page = 0; page < 30; page++) {
+      const data = await okxGet(`/api/v5/account/positions-history?limit=100${after ? `&after=${after}` : ''}`, creds);
+      positions.push(...data);
+      log(`Завантажено позицій: ${positions.length}…`);
+      if (data.length < 100) break;
+      after = data[data.length - 1].uTime;
+      await sleep(250); // stay well under OKX rate limits
+    }
+    const existing = new Set(trades.map((t) => t.id));
+    const fresh = positions.filter((p) => +p.openAvgPx && +p.closeAvgPx).map((p) => okxToTrade(p, ct)).filter((t) => !existing.has(t.id));
+    return { total: positions.length, added: fresh };
+  }
+
+  const okxDlg = $('#okxDialog');
+  const okxForm = $('#okxForm');
+  function openOkx() {
+    const saved = JSON.parse(localStorage.getItem(OKX_KEY) || 'null');
+    okxForm.reset();
+    if (saved) {
+      for (const k of ['key', 'secret', 'passphrase']) okxForm.elements[k].value = saved[k] || '';
+      okxForm.elements.demo.checked = Boolean(saved.demo);
+      okxForm.elements.remember.checked = true;
+    }
+    $('#okxForget').hidden = !saved;
+    $('#okxStatus').innerHTML = '';
+    $('#okxRun').disabled = false;
+    okxDlg.showModal();
+  }
+  okxForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = okxForm.elements;
+    const creds = { key: f.key.value.trim(), secret: f.secret.value.trim(), passphrase: f.passphrase.value, demo: f.demo.checked };
+    if (f.remember.checked) localStorage.setItem(OKX_KEY, JSON.stringify(creds));
+    else localStorage.removeItem(OKX_KEY);
+    const status = $('#okxStatus');
+    const log = (m) => { status.textContent = m; };
+    $('#okxRun').disabled = true;
+    try {
+      const { total, added } = await okxImport(creds, log);
+      if (added.length) {
+        trades = trades.concat(added);
+        const latest = added.reduce((a, t) => (t.date > a ? t.date : a), '');
+        calMonth = startOfMonth(new Date(latest + 'T00:00'));
+        save();
+      }
+      const pnl = added.reduce((a, t) => a + pnlOf(t), 0);
+      status.innerHTML = total
+        ? `Знайдено позицій: ${total}\nДодано нових: <b>${added.length}</b>${added.length ? `  ·  сумарно <span class="${cls(pnl)}">${money(pnl)}</span>` : ''}\nВже були в журналі: ${total - added.length}` +
+          (added.length ? '\n\nСтоп і тейк OKX не віддає — додай їх через «Редагувати», щоб бачити зони на графіку та R.' : '')
+        : 'Закритих позицій за останні 3 місяці не знайдено.';
+    } catch (err) {
+      status.innerHTML = `<span class="neg">${esc(err.message)}</span>`;
+    } finally {
+      $('#okxRun').disabled = false;
+      $('#okxForget').hidden = !localStorage.getItem(OKX_KEY);
+    }
+  });
+  $('#okxCancel').addEventListener('click', () => okxDlg.close());
+  $('#okxForget').addEventListener('click', () => {
+    localStorage.removeItem(OKX_KEY);
+    okxForm.reset();
+    $('#okxForget').hidden = true;
+    $('#okxStatus').textContent = 'Ключі видалено з браузера.';
+  });
+  $('#okxBtn').addEventListener('click', openOkx);
+  $('#okxEmptyBtn').addEventListener('click', openOkx);
+
   // ---------- events ----------
   $$('.tab').forEach((b) => b.addEventListener('click', () => {
     $$('.tab').forEach((x) => x.classList.toggle('active', x === b));
@@ -924,7 +1108,7 @@
     if (next) openTrade(next); else closeTrade();
   });
   document.addEventListener('keydown', (e) => {
-    if (!openId || dlg.open) return;
+    if (!openId || dlg.open || okxDlg.open) return;
     if (e.key === 'Escape') closeTrade();
     else if (e.key === 'ArrowLeft') stepTrade(-1);
     else if (e.key === 'ArrowRight') stepTrade(1);

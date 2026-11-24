@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600;1,6..72,400&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="style.css?v=4" />
+  <link rel="stylesheet" href="style.css?v=6" />
 </head>
 <body>
   <header class="masthead">
@@ -33,6 +33,7 @@
         <p>Запиши першу угоду або відкрий демо-журнал, щоб побачити, як це виглядає.</p>
         <div class="row">
           <button class="btn primary" id="emptyAdd">Записати угоду</button>
+          <button class="btn" id="okxEmptyBtn">Імпорт з OKX</button>
           <button class="btn" id="demoBtn">Відкрити демо</button>
         </div>
       </div>
@@ -67,6 +68,7 @@
           <h3>Усі угоди <span class="muted" id="tradeCount"></span></h3>
           <div class="row">
             <input type="search" id="search" placeholder="Тікер, сетап, нотатка…" />
+            <button class="btn" id="okxBtn">Імпорт з OKX</button>
             <button class="btn" id="exportBtn">Експорт</button>
             <label class="btn">Імпорт<input type="file" id="importFile" accept=".json" hidden /></label>
             <button class="btn ghost danger" id="clearBtn">Очистити</button>
@@ -133,6 +135,31 @@
     <div class="drawer-body" id="drawerBody"></div>
   </aside>
 
+  <!-- OKX IMPORT DIALOG -->
+  <dialog id="okxDialog">
+    <form id="okxForm" autocomplete="off">
+      <h3>Імпорт позицій з OKX</h3>
+      <p class="muted okx-intro">
+        Підтягує закриті позиції (ф'ючерси, свопи, маржа) за останні 3 місяці.
+        Створи на OKX API-ключ <b>лише з правом «Read»</b> — без торгівлі й виводу.
+        Ключі використовуються тільки в цьому браузері й надсилаються лише на okx.com.
+      </p>
+      <div class="form-grid">
+        <label class="full">API key<input name="key" required spellcheck="false" /></label>
+        <label>Secret key<input name="secret" type="password" required spellcheck="false" /></label>
+        <label>Passphrase<input name="passphrase" type="password" required spellcheck="false" /></label>
+        <label class="check"><input type="checkbox" name="remember" /> Запам'ятати ключі в цьому браузері</label>
+        <label class="check"><input type="checkbox" name="demo" /> Демо-рахунок OKX</label>
+      </div>
+      <div class="okx-status mono" id="okxStatus"></div>
+      <div class="row end">
+        <button type="button" class="btn ghost danger" id="okxForget" hidden>Забути ключі</button>
+        <button type="button" class="btn ghost" id="okxCancel">Закрити</button>
+        <button type="submit" class="btn primary" id="okxRun">Імпортувати</button>
+      </div>
+    </form>
+  </dialog>
+
   <!-- ADD/EDIT DIALOG -->
   <dialog id="tradeDialog">
     <form method="dialog" id="tradeForm">
@@ -158,6 +185,7 @@
         <label>Сетап<input type="text" name="setup" list="setupList" placeholder="Пробій, відскок…" /></label>
         <label>Стан
           <select name="emotion">
+            <option value="">—</option>
             <option>Спокій</option>
             <option>Впевненість</option>
             <option>FOMO</option>
@@ -188,6 +216,6 @@
   <footer>Дані зберігаються лише в цьому браузері. Не є фінансовою порадою.</footer>
 
   <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
-  <script src="app.js?v=4"></script>
+  <script src="app.js?v=6"></script>
 </body>
 </html>

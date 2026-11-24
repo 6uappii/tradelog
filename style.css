@@ -276,3 +276,16 @@ footer { text-align: center; color: var(--muted); font-size: 12px; padding: 28px
   .cal-d .p, .cal-w .p { font-size: 9px; }
   input[type=search] { min-width: 0; flex: 1; }
 }
+
+/* ---------- OKX import ---------- */
+.okx-intro { margin: -6px 0 16px; line-height: 1.5; }
+.okx-intro b { color: var(--ink); }
+label.check { display: flex; align-items: center; gap: 8px; color: var(--ink-2); font-size: 13px; }
+label.check input { width: auto; margin: 0; }
+.okx-status { margin-top: 14px; font-size: 13px; white-space: pre-wrap; min-height: 0; }
+.okx-status:not(:empty) { padding: 10px 12px; background: var(--paper); border: 1px dashed var(--rule); }
+.okx-status .neg { color: var(--red); }
+.okx-status .pos { color: var(--green); }
+.src-tag { font: 500 10px var(--mono); letter-spacing: .05em; text-transform: uppercase; color: var(--muted); border: 1px solid var(--rule); padding: 0 4px; margin-left: 6px; vertical-align: 1px; }
+
+[hidden] { display: none !important; }
