@@ -231,6 +231,15 @@ dialog h3 { margin: 0 0 16px; font: 600 24px var(--serif); }
 @media (max-width: 480px) { .kv { grid-template-columns: 1fr; } .d-result { grid-template-columns: 1fr 1fr; } .d-result > :first-child { grid-column: 1 / -1; } }
 
 .ladder svg { width: 100%; display: block; }
+.price-chart { height: 300px; border: 1px solid var(--rule); background: var(--sheet); }
+.chart-legend { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 8px; font-size: 12px; color: var(--muted); }
+.chart-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.lg { display: inline-block; width: 18px; height: 0; border-top: 2px solid var(--ink); }
+.lg-exit { border-top-style: dotted; border-top-color: var(--green); }
+.lg-stop { border-top: 1.5px dashed var(--red); }
+.lg-target { border-top: 1.5px dashed var(--green); }
+.chart-note { margin: 4px 0 0; font-size: 12px; }
+.price-chart a[href*="tradingview"] { opacity: .5; }
 .d-notes { background: var(--paper); border-left: 3px solid var(--ink); padding: 12px 14px; font: italic 17px/1.5 var(--serif); color: var(--ink-2); white-space: pre-wrap; }
 .compare { display: flex; flex-direction: column; gap: 10px; }
 .cmp-row { display: grid; grid-template-columns: 130px 1fr 80px; gap: 10px; align-items: center; font-size: 13px; }

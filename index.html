@@ -138,7 +138,10 @@
     <form method="dialog" id="tradeForm">
       <h3 id="dialogTitle">Нова угода</h3>
       <div class="form-grid">
-        <label>Дата<input type="date" name="date" required /></label>
+        <label>Дата входу<input type="date" name="date" required /></label>
+        <label>Час входу<input type="time" name="entryTime" /></label>
+        <label>Дата виходу<input type="date" name="exitDate" /></label>
+        <label>Час виходу<input type="time" name="exitTime" /></label>
         <label>Тікер<input type="text" name="ticker" placeholder="BTCUSDT, AAPL…" required /></label>
         <label>Сторона
           <select name="side">
@@ -184,6 +187,7 @@
   <div class="tooltip" id="tooltip"></div>
   <footer>Дані зберігаються лише в цьому браузері. Не є фінансовою порадою.</footer>
 
+  <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

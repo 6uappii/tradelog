@@ -292,6 +292,146 @@
     return svg + '</svg>';
   }
 
+  // ---------- price chart (lightweight-charts + Binance candles) ----------
+  const BINANCE = 'https://data-api.binance.vision/api/v3/klines';
+  const CRYPTO_RE = /^[A-Z0-9]{2,12}(USDT|USDC|FDUSD|BTC|ETH|BNB)$/;
+  const INTERVALS = [['1m', 60], ['3m', 180], ['5m', 300], ['15m', 900], ['30m', 1800], ['1h', 3600], ['2h', 7200], ['4h', 14400], ['6h', 21600], ['12h', 43200], ['1d', 86400]];
+  const klineCache = new Map();
+  const TZ = -new Date().getTimezoneOffset() * 60; // chart shows local time
+  let chart = null;
+  let chartToken = 0;
+
+  // entry/exit as unix seconds; falls back to the whole day when times are unknown
+  function tradeTimes(t) {
+    const exitDate = t.exitDate || t.date;
+    const entry = new Date(`${t.date}T${t.entryTime || '00:00'}`).getTime() / 1000;
+    let exit = new Date(`${exitDate}T${t.exitTime || (t.entryTime && !t.exitDate ? '' : '23:59')}`).getTime() / 1000;
+    if (!t.exitTime && t.entryTime && !t.exitDate) exit = entry + 3600; // only entry time known
+    if (!(exit > entry)) exit = entry + 3600;
+    return { entry, exit, exact: Boolean(t.entryTime && t.exitTime) };
+  }
+
+  async function fetchKlines(symbol, interval, startMs, endMs) {
+    const url = `${BINANCE}?symbol=${symbol}&interval=${interval}&startTime=${startMs}&endTime=${endMs}&limit=1000`;
+    if (klineCache.has(url)) return klineCache.get(url);
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('binance ' + res.status);
+    const rows = await res.json();
+    klineCache.set(url, rows);
+    return rows;
+  }
+
+  function levelsOf(t) {
+    const win = pnlOf(t) >= 0;
+    return [
+      t.stop != null && { price: t.stop, color: '#a8321f', lineStyle: 2, title: 'Стоп' },
+      t.target != null && { price: t.target, color: '#1d6b43', lineStyle: 2, title: 'Тейк' },
+      { price: t.entry, color: '#1b1a17', lineStyle: 0, title: 'Вхід' },
+      { price: t.exit, color: win ? '#1d6b43' : '#a8321f', lineStyle: 1, title: 'Вихід' },
+    ].filter(Boolean);
+  }
+
+  function makeChart(el) {
+    const LWC = window.LightweightCharts;
+    return LWC.createChart(el, {
+      autoSize: true,
+      layout: { background: { color: '#faf8f3' }, textColor: '#7a7366', fontFamily: 'IBM Plex Mono, monospace', fontSize: 11 },
+      grid: { vertLines: { color: '#ece6da' }, horzLines: { color: '#e2dbcc' } },
+      rightPriceScale: { borderColor: '#d8d1c2', scaleMargins: { top: 0.12, bottom: 0.12 } },
+      timeScale: { borderColor: '#d8d1c2', timeVisible: true, secondsVisible: false, rightOffset: 3 },
+      crosshair: { mode: LWC.CrosshairMode.Normal, vertLine: { color: '#1b1a17', style: 3, labelBackgroundColor: '#1b1a17' }, horzLine: { color: '#1b1a17', style: 3, labelBackgroundColor: '#1b1a17' } },
+      handleScroll: true, handleScale: true,
+    });
+  }
+
+  function addLevels(series, t) {
+    const levels = levelsOf(t);
+    levels.forEach((l) => series.createPriceLine({ ...l, lineWidth: l.title === 'Вхід' ? 2 : 1, axisLabelVisible: true }));
+    const prices = levels.map((l) => l.price);
+    series.applyOptions({
+      autoscaleInfoProvider: (orig) => {
+        const r = orig();
+        const lo = Math.min(...prices, r ? r.priceRange.minValue : Infinity);
+        const hi = Math.max(...prices, r ? r.priceRange.maxValue : -Infinity);
+        return { priceRange: { minValue: lo, maxValue: hi } };
+      },
+    });
+  }
+
+  function entryExitMarkers(t, entryT, exitT) {
+    const long = t.side !== 'short';
+    const win = pnlOf(t) >= 0;
+    return [
+      { time: entryT, position: long ? 'belowBar' : 'aboveBar', color: '#1b1a17', shape: long ? 'arrowUp' : 'arrowDown', text: `${long ? 'Long' : 'Short'} ${price(t.entry)}` },
+      { time: exitT, position: long ? 'aboveBar' : 'belowBar', color: win ? '#1d6b43' : '#a8321f', shape: 'circle', text: `Вихід ${price(t.exit)}` },
+    ].sort((a, b) => a.time - b.time);
+  }
+
+  async function renderPriceChart(t) {
+    const box = $('#priceChart'), note = $('#chartNote');
+    if (!box) return;
+    const token = ++chartToken;
+    if (chart) { chart.remove(); chart = null; }
+    if (!window.LightweightCharts) { box.innerHTML = '<p class="muted" style="padding:20px">Бібліотека графіків не завантажилась.</p>'; return; }
+
+    const tt = tradeTimes(t);
+    const symbol = t.ticker.replace(/[^A-Z0-9]/g, '');
+    let candles = null, iv = null;
+
+    if (CRYPTO_RE.test(symbol)) {
+      const span = tt.exit - tt.entry;
+      const from = tt.entry - Math.max(span * 0.8, 3600 * 3);
+      const to = Math.min(tt.exit + Math.max(span * 0.5, 3600 * 2), Date.now() / 1000);
+      iv = INTERVALS.find(([, s]) => (to - from) / s <= 160) || INTERVALS[INTERVALS.length - 1];
+      note.textContent = 'Завантажую свічки з Binance…';
+      try {
+        const rows = await fetchKlines(symbol, iv[0], Math.floor(from * 1000), Math.floor(to * 1000));
+        if (rows.length) candles = rows.map((r) => ({ time: r[0] / 1000 + TZ, open: +r[1], high: +r[2], low: +r[3], close: +r[4] }));
+      } catch { /* fall through to the schematic */ }
+      if (token !== chartToken) return; // user moved to another trade meanwhile
+    }
+
+    chart = makeChart(box);
+    const snap = (sec) => (iv ? Math.floor(sec / iv[1]) * iv[1] : sec) + TZ;
+
+    if (candles) {
+      const series = chart.addCandlestickSeries({
+        upColor: '#1d6b43', downColor: '#a8321f', borderVisible: false,
+        wickUpColor: '#1d6b43', wickDownColor: '#a8321f', priceLineVisible: false, lastValueVisible: false,
+        priceFormat: { type: 'price', precision: t.entry < 1 ? 5 : t.entry < 100 ? 3 : 2, minMove: t.entry < 1 ? 0.00001 : t.entry < 100 ? 0.001 : 0.01 },
+      });
+      series.setData(candles);
+      addLevels(series, t);
+      const first = candles[0].time, last = candles[candles.length - 1].time;
+      const clamp = (x) => Math.min(last, Math.max(first, x));
+      series.setMarkers(entryExitMarkers(t, clamp(snap(tt.entry)), clamp(snap(tt.exit))));
+      // tint the holding period
+      const hold = chart.addHistogramSeries({ priceScaleId: 'hold', color: 'rgba(233,223,184,0.55)', priceLineVisible: false, lastValueVisible: false });
+      chart.priceScale('hold').applyOptions({ visible: false, scaleMargins: { top: 0, bottom: 0 } });
+      hold.setData(candles.map((c) => ({ time: c.time, value: c.time >= snap(tt.entry) && c.time <= snap(tt.exit) ? 1 : 0 })));
+      note.innerHTML = `Свічки Binance · ${symbol} · ${iv[0]}${tt.exact ? '' : ' · час входу/виходу не вказано, показано весь день'}`;
+    } else {
+      const series = chart.addLineSeries({ color: '#1b1a17', lineWidth: 2, lineStyle: 0, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: true });
+      // a straight entry→exit segment, sampled so bars (and markers) stay normal-sized,
+      // with empty padding on both sides
+      const STEPS = 40, PAD = 12;
+      const step = Math.max(60, Math.round((tt.exit - tt.entry) / STEPS));
+      const a = tt.entry + TZ, b = a + step * STEPS;
+      const data = [];
+      for (let i = -PAD; i <= STEPS + PAD; i++) {
+        const time = a + i * step;
+        data.push(i < 0 || i > STEPS ? { time } : { time, value: t.entry + (t.exit - t.entry) * (i / STEPS) });
+      }
+      series.setData(data);
+      addLevels(series, t);
+      series.setMarkers(entryExitMarkers(t, a, b));
+      note.textContent = CRYPTO_RE.test(symbol)
+        ? `Не вдалося завантажити котирування ${symbol} — показано схему угоди.`
+        : 'Схема угоди: вхід → вихід на фоні рівнів. Реальні свічки підтягуються для крипто-пар Binance (BTCUSDT, ETHUSDT…).';
+    }
+    chart.timeScale().fitContent();
+  }
+
   function kv(rows) {
     return `<div class="kv">${rows.filter(Boolean).map(([k, v, c]) => `<div><span class="k">${k}</span><span class="v ${c || ''}">${v}</span></div>`).join('')}</div>`;
   }
@@ -341,7 +481,7 @@
           <div class="d-ticker">${esc(t.ticker)}</div>
           <div class="d-meta">
             <span class="side ${t.side}">${t.side === 'short' ? 'Short' : 'Long'}</span>
-            <span>${longDate(t.date)}</span>
+            <span>${longDate(t.date)}${t.entryTime ? `, ${esc(t.entryTime)}` : ''}${t.exitTime || t.exitDate ? ` → ${t.exitDate && t.exitDate !== t.date ? esc(t.exitDate) + ' ' : ''}${esc(t.exitTime || '')}` : ''}</span>
             ${t.setup ? `<span class="tag">${esc(t.setup)}</span>` : ''}
             <span class="tag">${esc(t.emotion)}</span>
           </div>
@@ -355,6 +495,18 @@
         <div><div class="label">Рух ціни</div><div class="mid ${cls(mv)}">${pct(mv)}</div></div>
       </div>
       <div class="muted">${outcome}${rank ? ` · ${rank}-а з ${all.length} за результатом` : ''}</div>
+
+      <div class="d-section">
+        <h4>Графік <span>стоп і тейк — лінії на сітці</span></h4>
+        <div class="price-chart" id="priceChart"></div>
+        <div class="chart-legend">
+          <span><i class="lg lg-entry"></i>Вхід</span>
+          <span><i class="lg lg-exit"></i>Вихід</span>
+          <span><i class="lg lg-stop"></i>Стоп</span>
+          <span><i class="lg lg-target"></i>Тейк</span>
+        </div>
+        <p class="muted chart-note" id="chartNote"></p>
+      </div>
 
       <div class="d-section ladder">
         <h4>Карта ціни <span>стоп → вхід → вихід → ціль</span></h4>
@@ -430,6 +582,7 @@
       </div>` : ''}
     `;
     $('#drawerBody').scrollTop = 0;
+    renderPriceChart(t);
     $$('#drawerBody [data-open]').forEach((row) => row.addEventListener('click', () => openTrade(row.dataset.open, sameSetup.map((x) => x.id).reverse())));
   }
 
@@ -536,7 +689,8 @@
   function readForm() {
     const f = form.elements;
     return {
-      date: f.date.value, ticker: f.ticker.value.trim().toUpperCase(), side: f.side.value,
+      date: f.date.value, entryTime: f.entryTime.value, exitDate: f.exitDate.value, exitTime: f.exitTime.value,
+      ticker: f.ticker.value.trim().toUpperCase(), side: f.side.value,
       qty: num(f.qty.value), entry: num(f.entry.value), exit: num(f.exit.value),
       stop: num(f.stop.value), target: num(f.target.value), fees: num(f.fees.value) || 0,
       setup: f.setup.value.trim(), emotion: f.emotion.value, grade: f.grade.value, notes: f.notes.value.trim(),
@@ -565,37 +719,116 @@
   $('#cancelBtn').addEventListener('click', () => dlg.close());
 
   // ---------- demo data ----------
-  function demo() {
-    const tickers = [['BTCUSDT', 65000, 0.05], ['ETHUSDT', 3200, 1], ['SOLUSDT', 150, 20], ['AAPL', 190, 15], ['TSLA', 240, 10], ['NVDA', 120, 25]];
-    const setups = [['Пробій', 0.58, 1.6], ['Відскок від рівня', 0.55, 1.3], ['Тренд-пулбек', 0.6, 1.8], ['Контртренд', 0.38, 1.0], ['Новини', 0.42, 1.2]];
-    const emos = [['Спокій', 0.08], ['Впевненість', 0.05], ['FOMO', -0.2], ['Страх', -0.1], ['Жадібність', -0.12], ['Реванш', -0.25], ['Нудьга', -0.08]];
+  // Crypto trades are simulated on real Binance 1h candles (entry at a candle close,
+  // exit where price actually touched stop/target), so the chart matches the trade.
+  // Stock trades are synthetic and shown as a schematic.
+  async function demo() {
+    const btn = $('#demoBtn');
+    btn.disabled = true; btn.textContent = 'Завантажую ціни…';
     const pick = (a) => a[Math.floor(Math.random() * a.length)];
+    const rand = (a, b) => a + Math.random() * (b - a);
+    const hhmm = (d) => `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    const goodSetups = ['Тренд-пулбек', 'Пробій', 'Відскок від рівня'];
+    const badSetups = ['Контртренд', 'Новини'];
+    const goodEmos = ['Спокій', 'Спокій', 'Впевненість'];
+    const badEmos = ['FOMO', 'Реванш', 'Жадібність', 'Страх', 'Нудьга'];
+    const winNotes = ['Чітко за планом.', 'Дочекався ретесту рівня, вхід без поспіху.', 'Взяв частину на першій цілі, решту довів до тейку.'];
+    const lossNotes = ['Зайшов рано, не дочекався підтвердження.', 'Увійшов після серії мінусів — хотів відігратися.', 'Обсяг на пробої був слабкий, але все одно зайшов.', 'Стоп був занадто близько до рівня.'];
+    const label = (win) => ({
+      setup: Math.random() < (win ? 0.75 : 0.35) ? pick(goodSetups) : pick(badSetups),
+      emotion: Math.random() < (win ? 0.75 : 0.3) ? pick(goodEmos) : pick(badEmos),
+      grade: win ? pick(['A', 'A', 'B', 'B', 'C']) : pick(['B', 'C', 'C', 'D']),
+      notes: Math.random() < 0.35 ? pick(win ? winNotes : lossNotes) : '',
+    });
     const out = [];
+    let n = 0;
+    const push = (t) => out.push({ id: uid(), created: Date.now() + n++, ...t });
+
+    // --- crypto on real candles ---
+    const coins = [['BTCUSDT', 0.05], ['ETHUSDT', 1], ['SOLUSDT', 20]];
+    let real = 0;
+    try {
+      const end = Date.now() - 3600e3;
+      const start = end - 90 * 86400e3;
+      const series = await Promise.all(coins.map(async ([sym]) => {
+        let rows = [], from = start;
+        while (from < end) {
+          const part = await fetchKlines(sym, '1h', from, end);
+          if (!part.length) break;
+          rows = rows.concat(part);
+          from = part[part.length - 1][0] + 3600e3;
+        }
+        return rows.map((r) => ({ t: r[0], o: +r[1], h: +r[2], l: +r[3], c: +r[4] }));
+      }));
+      await Promise.all(Array.from({ length: 48 }, async () => {
+        const ci = Math.floor(Math.random() * coins.length);
+        const [sym, qty] = coins[ci];
+        const cs = series[ci];
+        if (cs.length < 120) return;
+        const i = Math.floor(rand(0, cs.length - 60));
+        const side = Math.random() < 0.6 ? 'long' : 'short';
+        const dir = side === 'long' ? 1 : -1;
+        const entry = cs[i].c;
+        const riskPct = rand(0.006, 0.02);
+        const plan = rand(1.3, 3);
+        const stop = entry * (1 - dir * riskPct);
+        const target = entry * (1 + dir * riskPct * plan);
+        const hit = (c) => ({ stop: dir > 0 ? c.l <= stop : c.h >= stop, target: dir > 0 ? c.h >= target : c.l <= target });
+        let exit = null, exitAt = null;
+        for (let j = i + 1; j < Math.min(cs.length, i + 48); j++) {
+          const c = cs[j], h = hit(c);
+          if (!h.stop && !h.target) continue;
+          exit = h.stop ? stop : target; exitAt = c.t + 30 * 60e3;
+          // pin the exact minute (and which level came first) using 1m candles
+          try {
+            const mins = await fetchKlines(sym, '1m', c.t, c.t + 3600e3 - 1);
+            for (const m of mins) {
+              const mh = hit({ l: +m[3], h: +m[2] });
+              if (mh.stop || mh.target) { exit = mh.stop ? stop : target; exitAt = m[0] + 30e3; break; }
+            }
+          } catch { /* keep the hourly approximation */ }
+          break;
+        }
+        if (exit == null) { const j = Math.min(cs.length - 1, i + 47); exit = cs[j].c; exitAt = cs[j].t + 3600e3 - 60e3; }
+        const dp = entry < 100 ? 3 : 2;
+        const t = { ticker: sym, side, qty, entry: +entry.toFixed(dp), exit: +exit.toFixed(dp), stop: +stop.toFixed(dp), target: +target.toFixed(dp) };
+        const win = (t.exit - t.entry) * dir > 0;
+        const ein = new Date(cs[i].t + 3600e3), eout = new Date(exitAt);
+        push({ ...t, date: isoDate(ein), entryTime: hhmm(ein), exitDate: isoDate(eout), exitTime: hhmm(eout),
+          fees: +(entry * qty * 0.0008).toFixed(2), ...label(win) });
+        real++;
+      }));
+    } catch { /* offline or blocked — fall back to synthetic crypto below */ }
+
+    // --- synthetic stocks (and crypto if Binance was unreachable) ---
+    const synth = [['AAPL', 190, 15], ['TSLA', 240, 10], ['NVDA', 120, 25]];
+    if (!real) synth.push(['BTCUSDT', 65000, 0.05], ['ETHUSDT', 3200, 1]);
     const now = new Date();
-    for (let i = 0; i < 70; i++) {
-      const d = new Date(now); d.setDate(now.getDate() - Math.floor(Math.random() * 90));
+    for (let k = 0; k < (real ? 22 : 70); k++) {
+      const d = new Date(now); d.setDate(now.getDate() - 1 - Math.floor(Math.random() * 90));
       if (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() - (d.getDay() === 0 ? 2 : 1));
-      const [tk, px, q] = pick(tickers);
-      const [setup, wr, rr] = pick(setups);
-      const [emo, bias] = Math.random() < 0.55 ? pick(emos.slice(0, 2)) : pick(emos);
+      const [tk, px, qty] = pick(synth);
       const side = Math.random() < 0.65 ? 'long' : 'short';
       const dir = side === 'long' ? 1 : -1;
-      const entry = +(px * (0.9 + Math.random() * 0.2)).toFixed(2);
-      const riskPct = 0.01 + Math.random() * 0.02;
+      const entry = +(px * rand(0.9, 1.1)).toFixed(2);
+      const riskPct = rand(0.01, 0.03);
+      const plan = rand(1.3, 3);
       const stop = +(entry * (1 - dir * riskPct)).toFixed(2);
-      const plan = rr * (1.2 + Math.random() * 0.8);
       const target = +(entry * (1 + dir * riskPct * plan)).toFixed(2);
-      const win = Math.random() < wr + bias;
-      let move;
-      if (win) move = Math.random() < 0.4 ? riskPct * plan : riskPct * plan * (0.3 + Math.random() * 0.6);
-      else move = Math.random() < 0.6 ? -riskPct : -riskPct * (0.3 + Math.random() * 0.6);
+      const win = Math.random() < 0.5;
+      const move = win ? (Math.random() < 0.4 ? riskPct * plan : riskPct * plan * rand(0.3, 0.9)) : (Math.random() < 0.6 ? -riskPct : -riskPct * rand(0.3, 0.9));
       const exit = +(entry * (1 + dir * move)).toFixed(2);
-      const grade = win ? pick(['A', 'A', 'B', 'B', 'C']) : pick(['B', 'C', 'C', 'D']);
-      const notes = Math.random() < 0.3 ? pick(['Зайшов рано, не дочекався підтвердження.', 'Чітко за планом.', 'Пересунув стоп — більше так не роблю.', 'Взяв частину на першій цілі, решту закрив по трейлінгу.', 'Увійшов після серії мінусів — хотів відігратися.', 'Обсяг на пробої був слабкий, але все одно зайшов.']) : '';
-      out.push({ id: uid(), created: Date.now() + i, date: isoDate(d), ticker: tk, side, qty: q, entry, exit, stop, target, fees: +(entry * q * 0.0008).toFixed(2), setup, emotion: emo, grade, notes });
+      const h = Math.floor(rand(16, 21)), mi = Math.floor(rand(0, 60));
+      const dur = Math.floor(rand(20, 300));
+      const outT = new Date(d.getFullYear(), d.getMonth(), d.getDate(), h, mi + dur);
+      push({ date: isoDate(d), entryTime: `${String(h).padStart(2, '0')}:${String(mi).padStart(2, '0')}`,
+        exitDate: isoDate(outT), exitTime: hhmm(outT), ticker: tk, side, qty, entry, exit, stop, target,
+        fees: +(entry * qty * 0.0008).toFixed(2), ...label(win) });
     }
+
     trades = out;
     calMonth = startOfMonth(new Date());
+    btn.disabled = false; btn.textContent = 'Відкрити демо';
     save();
   }
 
