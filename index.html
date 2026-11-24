@@ -3,32 +3,37 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>TradeLog — журнал трейдера</title>
-  <meta name="description" content="Простий журнал угод: календар PnL, крива капіталу, аналітика сетапів та емоцій." />
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📈</text></svg>" />
+  <title>Tradelog — журнал угод</title>
+  <meta name="description" content="Журнал угод трейдера: календар PnL, крива капіталу, розбір кожної позиції." />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' fill='%231b1a17'/><path d='M6 22 L13 15 L18 19 L26 9' stroke='%23f4f1ea' stroke-width='3' fill='none'/></svg>" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600;1,6..72,400&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand">📈 <span>TradeLog</span></div>
-    <nav class="tabs">
-      <button class="tab active" data-view="dashboard">Дашборд</button>
-      <button class="tab" data-view="trades">Угоди</button>
-      <button class="tab" data-view="insights">Інсайти</button>
-      <button class="tab" data-view="calc">Калькулятор</button>
-    </nav>
-    <button class="btn primary" id="addBtn">+ Угода</button>
+  <header class="masthead">
+    <div class="masthead-inner">
+      <div class="wordmark">Tradelog<span class="wm-sub">журнал угод</span></div>
+      <nav class="tabs">
+        <button class="tab active" data-view="dashboard">Огляд</button>
+        <button class="tab" data-view="trades">Угоди</button>
+        <button class="tab" data-view="insights">Аналіз</button>
+        <button class="tab" data-view="calc">Калькулятор</button>
+      </nav>
+      <button class="btn primary" id="addBtn">Нова угода</button>
+    </div>
   </header>
 
   <main>
     <!-- DASHBOARD -->
     <section class="view active" id="view-dashboard">
       <div class="empty-hint" id="emptyHint">
-        <h2>Журнал порожній</h2>
-        <p>Додай першу угоду або завантаж демо-дані, щоб подивитися, як усе працює.</p>
+        <h2>Журнал поки порожній</h2>
+        <p>Запиши першу угоду або відкрий демо-журнал, щоб побачити, як це виглядає.</p>
         <div class="row">
-          <button class="btn primary" id="emptyAdd">+ Додати угоду</button>
-          <button class="btn" id="demoBtn">Завантажити демо</button>
+          <button class="btn primary" id="emptyAdd">Записати угоду</button>
+          <button class="btn" id="demoBtn">Відкрити демо</button>
         </div>
       </div>
 
@@ -38,17 +43,16 @@
         <div class="card">
           <div class="card-head">
             <h3>Крива капіталу</h3>
-            <span class="muted" id="ddLabel"></span>
+            <span class="muted mono" id="ddLabel"></span>
           </div>
           <div id="equity" class="chart"></div>
         </div>
         <div class="card">
           <div class="card-head">
-            <h3>Календар PnL</h3>
+            <h3 id="calTitle">Календар</h3>
             <div class="cal-nav">
-              <button class="icon-btn" id="calPrev">‹</button>
-              <span id="calTitle"></span>
-              <button class="icon-btn" id="calNext">›</button>
+              <button class="icon-btn" id="calPrev" aria-label="Попередній місяць">←</button>
+              <button class="icon-btn" id="calNext" aria-label="Наступний місяць">→</button>
             </div>
           </div>
           <div id="calendar" class="calendar"></div>
@@ -60,20 +64,21 @@
     <section class="view" id="view-trades">
       <div class="card">
         <div class="card-head">
-          <h3>Усі угоди</h3>
+          <h3>Усі угоди <span class="muted" id="tradeCount"></span></h3>
           <div class="row">
-            <input type="search" id="search" placeholder="Пошук: тікер, сетап, нотатка…" />
-            <button class="btn" id="exportBtn">Експорт JSON</button>
+            <input type="search" id="search" placeholder="Тікер, сетап, нотатка…" />
+            <button class="btn" id="exportBtn">Експорт</button>
             <label class="btn">Імпорт<input type="file" id="importFile" accept=".json" hidden /></label>
-            <button class="btn danger ghost" id="clearBtn">Очистити</button>
+            <button class="btn ghost danger" id="clearBtn">Очистити</button>
           </div>
         </div>
+        <p class="muted hint">Натисни на угоду, щоб відкрити повний розбір.</p>
         <div class="table-wrap">
           <table class="trades">
             <thead>
               <tr>
-                <th>Дата</th><th>Тікер</th><th>Сторона</th><th>Вхід</th><th>Вихід</th>
-                <th>К-сть</th><th>PnL</th><th>R</th><th>Сетап</th><th>Емоція</th><th></th>
+                <th>Дата</th><th>Тікер</th><th>Сторона</th><th class="num">Вхід</th><th class="num">Вихід</th>
+                <th class="num">К-сть</th><th class="num">PnL</th><th class="num">R</th><th>Сетап</th><th>Стан</th>
               </tr>
             </thead>
             <tbody id="tradeRows"></tbody>
@@ -86,17 +91,17 @@
     <section class="view" id="view-insights">
       <div class="verdicts" id="verdicts"></div>
       <div class="grid-2">
-        <div class="card"><h3>PnL за сетапами</h3><div id="bySetup" class="bars"></div></div>
-        <div class="card"><h3>PnL за емоціями</h3><div id="byEmotion" class="bars"></div></div>
-        <div class="card"><h3>PnL за днями тижня</h3><div id="byWeekday" class="bars"></div></div>
-        <div class="card"><h3>PnL за тікерами</h3><div id="byTicker" class="bars"></div></div>
+        <div class="card"><h3>За сетапами</h3><div id="bySetup" class="bars"></div></div>
+        <div class="card"><h3>За станом</h3><div id="byEmotion" class="bars"></div></div>
+        <div class="card"><h3>За днями тижня</h3><div id="byWeekday" class="bars"></div></div>
+        <div class="card"><h3>За тікерами</h3><div id="byTicker" class="bars"></div></div>
       </div>
     </section>
 
     <!-- CALCULATOR -->
     <section class="view" id="view-calc">
       <div class="card calc">
-        <h3>Калькулятор розміру позиції</h3>
+        <h3>Розмір позиції</h3>
         <p class="muted">Скільки купувати, щоб на стопі втратити рівно стільки, скільки готовий.</p>
         <div class="form-grid">
           <label>Депозит, $<input type="number" id="cBalance" value="10000" step="any" /></label>
@@ -110,7 +115,25 @@
     </section>
   </main>
 
-  <!-- MODAL -->
+  <!-- TRADE DETAIL DRAWER -->
+  <div class="drawer-backdrop" id="drawerBackdrop"></div>
+  <aside class="drawer" id="drawer" aria-hidden="true">
+    <div class="drawer-bar">
+      <div class="row">
+        <button class="icon-btn" id="dPrev" title="Попередня (←)">←</button>
+        <button class="icon-btn" id="dNext" title="Наступна (→)">→</button>
+        <span class="muted mono" id="dPos"></span>
+      </div>
+      <div class="row">
+        <button class="btn" id="dEdit">Редагувати</button>
+        <button class="btn ghost danger" id="dDelete">Видалити</button>
+        <button class="icon-btn" id="dClose" title="Закрити (Esc)">✕</button>
+      </div>
+    </div>
+    <div class="drawer-body" id="drawerBody"></div>
+  </aside>
+
+  <!-- ADD/EDIT DIALOG -->
   <dialog id="tradeDialog">
     <form method="dialog" id="tradeForm">
       <h3 id="dialogTitle">Нова угода</h3>
@@ -126,10 +149,11 @@
         <label>Кількість<input type="number" name="qty" step="any" min="0" required /></label>
         <label>Ціна входу<input type="number" name="entry" step="any" required /></label>
         <label>Ціна виходу<input type="number" name="exit" step="any" required /></label>
-        <label>Стоп-лос (для R)<input type="number" name="stop" step="any" /></label>
+        <label>Стоп-лос<input type="number" name="stop" step="any" /></label>
+        <label>Ціль (тейк)<input type="number" name="target" step="any" /></label>
         <label>Комісії, $<input type="number" name="fees" step="any" value="0" /></label>
         <label>Сетап<input type="text" name="setup" list="setupList" placeholder="Пробій, відскок…" /></label>
-        <label>Емоція
+        <label>Стан
           <select name="emotion">
             <option>Спокій</option>
             <option>Впевненість</option>
@@ -140,10 +164,16 @@
             <option>Нудьга</option>
           </select>
         </label>
+        <label>Оцінка виконання
+          <select name="grade">
+            <option value="">—</option>
+            <option>A</option><option>B</option><option>C</option><option>D</option>
+          </select>
+        </label>
         <label class="full">Нотатки<textarea name="notes" rows="3" placeholder="Чому увійшов, що пішло не так…"></textarea></label>
       </div>
       <datalist id="setupList"></datalist>
-      <div class="pnl-preview" id="pnlPreview"></div>
+      <div class="pnl-preview mono" id="pnlPreview"></div>
       <div class="row end">
         <button type="button" class="btn ghost" id="cancelBtn">Скасувати</button>
         <button type="submit" class="btn primary">Зберегти</button>
@@ -152,7 +182,7 @@
   </dialog>
 
   <div class="tooltip" id="tooltip"></div>
-  <footer>Дані зберігаються тільки у твоєму браузері (localStorage). Не фінансова порада.</footer>
+  <footer>Дані зберігаються лише в цьому браузері. Не є фінансовою порадою.</footer>
 
   <script src="app.js"></script>
 </body>
